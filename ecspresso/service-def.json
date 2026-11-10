@@ -1,0 +1,24 @@
+{
+    "desiredCount": {{ or (env `DESIRED_COUNT`) 1 }},
+    "launchType": "FARGATE",
+    "healthCheckGracePeriodSeconds": 300,
+    "deploymentConfiguration": {
+        "maximumPercent": 200,
+        "minimumHealthyPercent": 50
+    },
+    "networkConfiguration": {
+        "awsvpcConfiguration": {
+            "subnets": ["{{ env `SUBNET_ID_1` }}", "{{ env `SUBNET_ID_2` }}"],
+            "securityGroups": ["{{ env `SECURITY_GROUP_ID` }}"],
+            "assignPublicIp": "DISABLED"
+        }
+    },
+    "loadBalancers": [
+        {
+            "targetGroupArn": "{{ env `TARGET_GROUP_ARN` }}",
+            "containerName": "{{ env `APP_NAME` }}-Container",
+            "containerPort": {{ or (env `APP_PORT`) 8080 }}
+        }
+    ],
+    "enableExecuteCommand": true
+}

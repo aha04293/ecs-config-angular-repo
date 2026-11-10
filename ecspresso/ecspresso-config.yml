@@ -1,0 +1,6 @@
+region: "{{ env `awsRegion` }}"
+cluster: "{{ env `ProjPrefix` }}-EcsCluster"
+service: "{{ env `ProjPrefix` }}-{{ env `ENV_NAME` }}-{{ env `APP_NAME` }}-{{ env `USER_NAME` }}-Service"
+service_definition: ./service-def.json
+task_definition: ./task-def.json
+timeout: 10m

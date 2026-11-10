@@ -1,0 +1,5 @@
+{
+    "memoryLimitMiB": 512,
+    "cpu": 256,
+    "desiredCount": 0
+}

@@ -1,0 +1,104 @@
+version: 0.2
+
+phases:
+    install:
+        runtime-versions:
+            nodejs: 20
+        commands:
+            - echo "=== Node & NPM version ==="
+            - node -v
+            - npm -v
+            - echo "=== Install CDK locally ==="
+            - npm install aws-cdk cdk-assets typescript
+            - export PATH=$PWD/node_modules/.bin:$PATH
+    build:
+        commands:
+            # ecspressoのインストール
+            - aws s3 cp s3://${TOOLS_BUCKET}/tools/ci/ecspresso.tar.gz /tmp/ecspresso.tar.gz
+            - tar -xzvf /tmp/ecspresso.tar.gz -C /tmp
+            - chmod +x /tmp/ecspresso
+            - mv /tmp/ecspresso /usr/local/bin/ecspresso
+            - ecspresso version
+
+            # 開発アカウントの認証情報にスイッチ
+            - echo "Assuming role in dev account..."
+            - CREDS=$(aws sts assume-role --role-arn arn:aws:iam::${awsAccountId}:role/${ProjPrefix}-${ENV_NAME}-${APP_NAME}-${USER_NAME}-EcsDeployRole --role-session-name codebuild-deploy)
+            - export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)
+            - export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)
+            - export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)
+            - aws sts get-caller-identity
+
+            # IMAGE_TAG の解決（AssumeRole後に開発アカウントの ECS/SSM を参照）
+            - echo "[Log] IMAGE_TAG:" ${IMAGE_TAG}
+            - |
+                if [ "${IMAGE_TAG}" = "__CURRENT__" ] || [ -z "${IMAGE_TAG}" ]; then
+                    echo "[INFO] IMAGE_TAG is '__CURRENT__' or empty. Fetching current image tag from ECS..."
+                    CLUSTER_NAME=$(aws ssm get-parameter --name ${CLUSTER_NAME_PARAM} --query "Parameter.Value" --output text)
+                    echo "[DEBUG] CLUSTER_NAME: ${CLUSTER_NAME}"
+                    SERVICE_NAME="${ProjPrefix}-${ENV_NAME}-${APP_NAME}-${USER_NAME}-Service"
+                    echo "[DEBUG] SERVICE_NAME: ${SERVICE_NAME}"
+                    TASK_DEF_ARN=$(aws ecs describe-services \
+                        --cluster "${CLUSTER_NAME}" \
+                        --services "${SERVICE_NAME}" \
+                        --query "services[0].taskDefinition" \
+                        --output text)
+                    echo "[DEBUG] TASK_DEF_ARN: ${TASK_DEF_ARN}"
+                    if [ -z "${TASK_DEF_ARN}" ] || [ "${TASK_DEF_ARN}" = "None" ]; then
+                        echo "[WARN] Service not found or no taskDefinition. IMAGE_TAG will be empty. Deploy may fail."
+                    else
+                        CURRENT_IMAGE=$(aws ecs describe-task-definition \
+                            --task-definition "${TASK_DEF_ARN}" \
+                            --query "taskDefinition.containerDefinitions[0].image" \
+                            --output text)
+                        echo "[DEBUG] CURRENT_IMAGE: ${CURRENT_IMAGE}"
+                        export IMAGE_TAG=$(echo "${CURRENT_IMAGE}" | awk -F: '{print $NF}')
+                        echo "[INFO] Resolved IMAGE_TAG from current ECS task: ${IMAGE_TAG}"
+                    fi
+                else
+                    echo "[OK] IMAGE_TAG: ${IMAGE_TAG}"
+                fi
+
+            # 値をSSMから取得
+            - SUBNET_ID_1=$(aws ssm get-parameter --name ${SUBNET_ID_1_PARAM} --query "Parameter.Value" --output text)
+            - SUBNET_ID_2=$(aws ssm get-parameter --name ${SUBNET_ID_2_PARAM} --query "Parameter.Value" --output text)
+            - SECURITY_GROUP_ID=$(aws ssm get-parameter --name ${SECURITY_GROUP_ID_PARAM} --query "Parameter.Value" --output text)
+            - TARGET_GROUP_ARN=$(aws ssm get-parameter --name ${TARGET_GROUP_ARN_PARAM} --query "Parameter.Value" --output text)
+
+            # deploy-config.json から cpu/memory/desiredCount を読み込む
+            - export DESIRED_COUNT=$(jq -r '.desiredCount' deploy-config.json)
+            - export memoryLimitMiB=$(jq -r '.memoryLimitMiB' deploy-config.json)
+            - export cpu=$(jq -r '.cpu' deploy-config.json)
+
+            # ecspresso 用 envファイルを作成
+            - ECSPRESSO_ENV_FILE=/tmp/.ecspresso-env
+            - |
+                cat > ${ECSPRESSO_ENV_FILE} << EOF
+                IMAGE_TAG=${IMAGE_TAG}
+                ProjPrefix=${ProjPrefix}
+                ProjPrefixLower=$(echo "${ProjPrefix}" | tr "[:upper:]" "[:lower:]")
+                ENV_NAME=${ENV_NAME}
+                USER_NAME=${USER_NAME}
+                awsRegion=${awsRegion}
+                awsAccountId=${awsAccountId}
+                APP_NAME=${APP_NAME}
+                APP_NAME_LOWER=${APP_NAME_LOWER}
+                APP_PORT=${APP_PORT}
+                DESIRED_COUNT=${DESIRED_COUNT}
+                memoryLimitMiB=${memoryLimitMiB}
+                cpu=${cpu}
+                TARGET_GROUP_ARN=${TARGET_GROUP_ARN}
+                SUBNET_ID_1=${SUBNET_ID_1}
+                SUBNET_ID_2=${SUBNET_ID_2}
+                SECURITY_GROUP_ID=${SECURITY_GROUP_ID}
+                EOF
+            - cat ${ECSPRESSO_ENV_FILE}
+
+            # .defの内容確認
+            - ecspresso render task-definition --config ecspresso/ecspresso-config.yml --envfile ${ECSPRESSO_ENV_FILE} || true
+            - ecspresso render service-definition --config ecspresso/ecspresso-config.yml --envfile ${ECSPRESSO_ENV_FILE} || true
+
+            # verify
+            - ecspresso verify --config ecspresso/ecspresso-config.yml --envfile ${ECSPRESSO_ENV_FILE}
+
+            # デプロイ
+            - ecspresso deploy --config ecspresso/ecspresso-config.yml --envfile ${ECSPRESSO_ENV_FILE}

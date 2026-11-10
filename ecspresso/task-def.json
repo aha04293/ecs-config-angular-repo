@@ -1,0 +1,29 @@
+{
+    "family": "{{ env `ProjPrefix` }}-{{ env `ENV_NAME` }}-{{ env `APP_NAME` }}-{{ env `USER_NAME` }}-TaskDef",
+    "cpu": "{{ env `cpu` }}",
+    "memory": "{{ env `memoryLimitMiB` }}",
+    "networkMode": "awsvpc",
+    "requiresCompatibilities": ["FARGATE"],
+    "executionRoleArn": "arn:aws:iam::{{ env `awsAccountId` }}:role/{{ env `ProjPrefix` }}-{{ env `ENV_NAME` }}-{{ env `APP_NAME` }}-{{ env `USER_NAME` }}-TaskExecutionRole",
+    "taskRoleArn": "arn:aws:iam::{{ env `awsAccountId` }}:role/{{ env `ProjPrefix` }}-{{ env `ENV_NAME` }}-{{ env `APP_NAME` }}-{{ env `USER_NAME` }}-TaskRole",
+    "containerDefinitions": [
+        {
+            "name": "{{ env `APP_NAME` }}-Container",
+            "image": "{{ env `awsAccountId` }}.dkr.ecr.{{ env `awsRegion` }}.amazonaws.com/{{ env `ProjPrefixLower` }}-repo/{{ env `APP_NAME_LOWER` }}:{{ env `IMAGE_TAG` }}",
+            "portMappings": [
+                {
+                    "containerPort": {{ or (env `APP_PORT`) 8080 }},
+                    "protocol": "tcp"
+                }
+            ],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "/ecs/{{ env `ProjPrefix` }}-{{ env `ENV_NAME` }}-{{ env `APP_NAME` }}-{{ env `USER_NAME` }}-log-group",
+                    "awslogs-region": "{{ env `awsRegion` }}",
+                    "awslogs-stream-prefix": "ecs"
+                }
+            }
+        }
+    ]
+}
