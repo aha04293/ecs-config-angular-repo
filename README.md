@@ -48,15 +48,26 @@ graph TD
     end
 ```
 
-### 1. GitHub Actions による事前検証
+### 1. GitHub Actions による事前品質検証
 
-- アプリリポジトリ (`app/angular`) の `.github/workflows/sonar-analysis.yml` により、PR 作成・更新時および `main` push 時に単体テスト（Karma + ChromeHeadless）、静的解析（ESLint）、SonarQube 解析（品質ゲート待機）が実行されます。
-- GitHub Actions の実行基盤には AWS CodeBuild マネージドランナー (`runs-on: codebuild-...`) が使用されます。
+- **トリガー**: アプリ開発ブランチから `main` への PR 作成・更新時、または `main` ブランチへの push 時
+- **ランナー挙動**: AWS VPC 内の SonarQube と通信可能な CodeBuild エピメラルランナーがオンデマンドで起動
+- **検証フロー**:
+  1. Node.js 20 環境のセットアップ
+  2. SonarQube サーバーへの疎通・認証チェック
+  3. Karma + ChromeHeadless による単体テストおよびカバレッジ（`coverage/lcov.info`）出力
+  4. ESLint による静的解析（`eslint-report.json` 出力）
+  5. SonarQube への解析送信と Quality Gate 判定（判定結果が出るまで待機し、NG の場合はジョブ失敗＝PR マージ不可）
 
-### 2. CD パイプラインのトリガー
+### 2. AWS CodePipeline (本番 CI/CD) との連携
 
-- **アプリコード更新時**: CI パイプライン（App-Build → Image-Build）完了後、生成された ECR イメージタグを受け取って CD パイプラインが自動起動し、本リポジトリの設定を使って ECS へデプロイします。
-- **ECS 設定更新時**: 本リポジトリ（`ecs-config-angular-repo`）の `ecspresso/**` や `deploy-config.json` を変更して push すると、CD パイプライン単体が起動します。イメージタグは稼働中のタグ（`__CURRENT__`）が維持され、タスク定義やサービス定義の設定のみが更新されます。
+- **アプリコード更新（PR マージ後）**:
+  - `main` ブランチへのマージを検知して CodePipeline CI（App-Build → Image-Build）が起動
+  - Image-Build でビルドされたコンテナイメージが ECR へ push され、イメージタグが CD パイプラインへ通知される
+  - CD パイプラインが本リポジトリ（`ecs-config-angular-repo`）の `ecspresso` 設定と `deploy-config.json` を参照し、新しいイメージで ECS サービスをローリングアップデート
+- **ECS 設定更新時（本リポジトリへの push）**:
+  - `ecspresso/**` や `deploy-config.json` の変更を検知して **CD パイプライン単体** が起動
+  - イメージタグには現在稼働中のタグ（`__CURRENT__`）が自動適用され、コンテナイメージを再ビルドすることなく CPU / メモリ / タスク数 / 環境変数の変更が即座に ECS へ反映
 
 ## 設定変更とデプロイ手順
 
